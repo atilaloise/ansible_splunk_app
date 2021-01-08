@@ -137,11 +137,11 @@ def app_enable(service, name):
     app = service.apps[name]
     app.enable()
 
-def index_disable(service, name):
+def app_disable(service, name):
     app = service.apps[name]
     app.disable()
 
-def index_delete(service, name):
+def app_delete(service, name):
     app = service.apps[name]
     app.delete()
 
@@ -157,19 +157,19 @@ def main():
             scheme=dict(type="str", choices=["http", "https"], default="https"),
             version=dict(type="str", required=True),
             name=dict(type="str", required=True),
-            app_version=dict(type="str", required=True),
+            author=dict(type="str", required=True),
+            description=dict(type="str", required=True),
+            label=dict(type="str", required=True),
+            app_version=dict(type="str", default="1.0.0"),
             disabled=dict(type="bool", default=False),
-            template=dict(type="str"),
+            template=dict(type="str",default="barebones"),
             visible=dict(type="bool", default=False),
-            auth=dict(type="str"),
-            author=dict(type="str"),
+            update=dict(type="bool", default=True),
             configured=dict(type="bool", default=True),
-            description=dict(type="str"),
+            auth=dict(type="str"),
             explicit_appname=dict(type="str"),
             filename=dict(type="str"),
-            label=dict(type="str"),
             session=dict(type="str"),
-            update=dict(type="bool", default=False),
             state=dict(type="str", choices=["present", "absent"], default="present"),
         ),
         required_if=([("state", "present", ["name", "password"])]),
@@ -179,19 +179,17 @@ def main():
     result = dict(
         changed=False,
         changed_state={},
-        geted_values={}
+        facter={}
     )
 
     if module.check_mode:
         module.exit_json(**result)
     
     requested_state = module.params["state"]
-    disable_index = module.params["disabled"]
-    clean_index = module.params["clean"]
-    name = module.params["name"]
+
+    # Parameter assignments for splunk connection
 
     splunk_connection={}
-    
     splunk_connection["host"] = module.params["host"]
     splunk_connection["port"] = module.params["port"]
     splunk_connection["username"] = module.params["username"]
@@ -199,70 +197,74 @@ def main():
     splunk_connection["version"] = module.params["version"]
     splunk_connection["scheme"] = module.params["scheme"]
 
-    index_config = {}
-    index_new_config = {}
-    
-    
-    index_config['app'] = module.params["app"]
-    
-    if module.params["homePath"] is not None:
-        index_config['homePath'] = module.params["homePath"]
+    # Parameter assignments for app management
 
-    if module.params["homePath_maxDataSizeMB"] is not None:
-        index_config['homePath.maxDataSizeMB']  = module.params["homePath_maxDataSizeMB"]
+    app_config = {}
+    app_new_config = {}
+    
+    # Required or default valued parameters
+
+    name = module.params["name"]
+    app_config['author'] = module.params["author"]
+    app_config['visible'] = int(module.params["visible"])
+    app_config['configured'] = int(module.params["configured"])
+    app_config['description'] = module.params["description"]
+    app_config['label'] = module.params["label"]
+    app_config['update'] = module.params["update"]
+    app_config['version'] = module.params["app_version"]
+    app_config['template'] = module.params["template"]
+    disable_app= module.params["disabled"]
+    # Optional parameters
+
+    if module.params["filename"] is not None:
+        app_config['filename']  = module.params["filename"]
         
-    if module.params["coldPath"] is not None:
-        index_config['coldPath'] = module.params["coldPath"]
+    if module.params["explicit_appname"] is not None:
+        app_config['explicit_appname'] = module.params["explicit_appname"]
 
-    if module.params["coldPath_maxDataSizeMB"] is not None:
-        index_config['coldPath.maxDataSizeMB'] = module.params["coldPath_maxDataSizeMB"]
+    if module.params["auth"] is not None:
+        app_config['auth'] = module.params["auth"]
 
-    if module.params["retention"] is not None:
-        index_config['frozenTimePeriodInSecs'] = module.params["retention"]
+    if module.params["session"] is not None:
+        app_config['session'] = module.params["session"]
 
-    if module.params["maxTotalDataSizeMB"] is not None:
-        index_config['maxTotalDataSizeMB'] = module.params["maxTotalDataSizeMB"]
-
+    
+    # Connecting to splunk
     
     service = connect(**splunk_connection)
-
-
+    
+    # Module Logic
     
     if requested_state == 'present':
-        if not index_exists(service, name):
-            index_create(service, name, **index_config)
-            if module.params["disabled"]:
-                index_disable(service, name)
+        if not app_exists(service, name):
+            app_create(service, name, **app_config)
+            if disable_app:
+                app_disable(service, name)
             result['changed']=True
-        elif index_config:
+        elif app_config:
             # remove unsuported values in update actions
-            index_config.pop('homePath', None)
-            index_config.pop('coldPath', None)
-            index_config.pop('app', None)
+            app_config.pop('update', None)
+            app_config.pop('template', None)
+    
+            result['facter']=service.apps[name].content
+            for key in app_config:
+                if str(app_config[key]) != service.apps[name].content[key]:
+                    app_new_config[key] = app_config[key]
 
-            for key in index_config:
-                if str(index_config[key]) != service.indexes[name].content[key]:
-                    index_new_config[key] = index_config[key]
-
-            if index_new_config:
-                index_update(service, name, **index_new_config)
+            if app_new_config:
+                app_update(service, name, **app_new_config)
                 result['changed']=True
-                result['changed_state']=index_new_config
-
-        if disable_index and (disable_index != bool(int(service.indexes[name].content["disabled"]))):
-            index_disable(service, name)
-            result['changed']=True
-        elif (not disable_index) and (disable_index != bool(int(service.indexes[name].content["disabled"]))):
-            index_enable(service, name)
-            result['changed']=True
+                result['changed_state']=app_new_config
         
-        if clean_index:
-            index_clean(service, name)
+        if disable_app and (disable_app != bool(int(service.apps[name].content["disabled"]))):
+            app_disable(service, name)
             result['changed']=True
-
+        elif (not disable_app) and (disable_app != bool(int(service.apps[name].content["disabled"]))):
+            app_enable(service, name)
+            result['changed']=True
     else:
-        if index_exists(service, name):
-            index_delete(service, name)
+        if app_exists(service, name):
+            app_delete(service, name)
             result['changed']=True
         else:
             result['changed']=False
